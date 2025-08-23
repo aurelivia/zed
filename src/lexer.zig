@@ -126,6 +126,7 @@ buffer: std.ArrayListUnmanaged(u21) = .empty,
 queued: ?Token.Value = null,
 pending: ?u21 = null,
 errored: ?LexerError = null,
+peeked: ?Token = null,
 
 char: u21 = 0,
 char_len: usize = 0,
@@ -235,8 +236,19 @@ fn wrappedOrElse(self: *Self, val: Token.Value) std.mem.Allocator.Error!Token {
     return self.give(val);
 }
 
+pub fn peek(self: *Self) !Token {
+    if (self.peeked) |p| return p;
+    self.peeked = try self.next();
+    return self.peeked;
+}
+
 pub fn next(self: *Self) !Token {
     if (self.errored) |e| return e;
+
+    if (self.peeked) |p| {
+        self.peeked = null;
+        return p;
+    }
 
     if (self.queued) |val| {
         self.queued = null;
@@ -504,6 +516,7 @@ pub fn dump(self: *Self, output: anytype) !void {
                         break :b buf[0..len];
                     }
                 });
+                try output.print("⟨{X:0>4}⟩", .{ c });
             },
             .number => |num| {
                 try output.print("({})", .{ token.col });
