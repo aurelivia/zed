@@ -1,6 +1,9 @@
 const std = @import("std");
+const view = @import("./view/build.zig");
 
 pub fn build(b: *std.Build) void {
+    // view.build(b);
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -15,8 +18,4 @@ pub fn build(b: *std.Build) void {
     run.step.dependOn(b.getInstallStep());
     if (b.args) |args| run.addArgs(args);
     step.dependOn(&run.step);
-    // const run_tests = b.step("test", "Run tests");
-    // const tests = b.addTest(.{ .root_source_file = b.path("test/main.zig"), .target = target, .optimize = optimize });
-    // tests.root_module.addImport("self", root);
-    // run_tests.dependOn(&b.addRunArtifact(tests).step);
 }
