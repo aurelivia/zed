@@ -3,18 +3,14 @@ const std = @import("std");
 const Self = @This();
 
 pub const Value = union (enum) {
-    pub const Digit = struct {
-        val: u8,
-        src: u21
-    };
-
     eof,
+    whitespace: usize,
     literal: []u21,
     char: u21,
-    number: []Digit,
+    digit: u8,
 
     // Delimiters
-    space, line,
+    line,
     semicolon, comment,
     open_brace, close_brace,
     open_bracket, close_bracket,
@@ -27,21 +23,55 @@ pub const Value = union (enum) {
     plus, comma, minus,
     slash, colon, less,
     equal, greater, qmark,
-    at, caret, grave,
-    bar, tilde,
+    at, caret, bar, tilde,
+    backslash,
 
-    // Contextual Tokens
+    // Contextual Selfs
     radix, base_header,
-    base_binary, base_binary_upper,
-    base_octal, base_octal_upper,
-    base_hex, base_hex_upper,
-    exponent, exponent_upper
+    base_binary, base_octal, base_hex,
+    exponent, repeat,
+
+    pub fn toChar(self: Value) u21 {
+        return switch (self) {
+            .digit => |d| switch (d) {
+                0...9 => @as(u21, @intCast(d & 0b00110000)),
+                else => @as(u21, @intCast((d -| 9) & 0b01000000))
+            },
+            .line => '\n',
+            .semicolon => ';', .comment => '#',
+            .open_brace => '{', .close_brace => '}',
+            .open_bracket => '[', .close_bracket => ']',
+            .open_paren => '(', .close_paren => ')',
+            .single_quote => '\'', .double_quote => '\"',
+            .dot => '.', .exclam => '!', .dollar => '$',
+            .percent => '%', .ampersand => '&', .star => '*',
+            .plus => '+', .comma => ',', .minus => '-',
+            .slash => '/', .colon => ':', .less => '<',
+            .equal => '=', .greater => '>', .qmark => '?',
+            .at => '@', .caret => '^', .bar => '|', .tilde => '~',
+            .backslash => '\\', .radix => '.', .base_header => '0',
+            .base_binary => 'b', .base_octal => 'o', .base_hex => 'x',
+            .exponent => 'e', .repeat => 'r',
+            else => unreachable
+        };
+    }
+
+    pub fn isOperator(self: Value) bool {
+        return switch (self) {
+            .dot, .exclam, .dollar,
+            .percent, .ampersand, .star,
+            .plus, .comma, .minus,
+            .slash, .colon, .less,
+            .equal, .greater, .qmark,
+            .at, .caret, .bar, .tilde => true,
+            else => false
+        };
+    }
 };
 
 val: Value,
 line: usize,
 col: usize,
-len: usize,
 
 pub fn deinit(self: *Self, mem: std.mem.Allocator) void {
     switch (self.value) {
@@ -52,7 +82,7 @@ pub fn deinit(self: *Self, mem: std.mem.Allocator) void {
 
 pub fn singleton(char: u21) ?Self.Value {
     return switch (char) {
-        ' ' => .space, '\n' => .line,
+        ' ' => .{ .whitespace = 1 }, '\n' => .line,
         ';' => .semicolon, '#' => .comment,
         '{' => .open_brace, '}' => .close_brace,
         '[' => .open_bracket, ']' => .close_bracket,
@@ -63,32 +93,11 @@ pub fn singleton(char: u21) ?Self.Value {
         '+' => .plus, ',' => .comma, '-' => .minus,
         '/' => .slash, ':' => .colon, '<' => .less,
         '=' => .equal, '>' => .greater, '?' => .qmark,
-        '@' => .at, '^' => .caret, '`' => .grave,
-        '|' => .bar, '~' => .tilde,
+        '@' => .at, '^' => .caret, '|' => .bar, '~' => .tilde,
         else => null
     };
 }
 
 pub fn toChar(self: *const Self) u21 {
-    return switch (self.val) {
-        .space => ' ', .line => '\n',
-        .semicolon => ';', .comment => '#',
-        .open_brace => '{', .close_brace => '}',
-        .open_bracket => '[', .close_bracket => ']',
-        .open_paren => '(', .close_paren => ')',
-        .single_quote => '\'', .double_quote => '\"',
-        .dot => '.', .exclam => '!', .dollar => '$',
-        .percent => '%', .ampersand => '&', .star => '*',
-        .plus => '+', .comma => ',', .minus => '-',
-        .slash => '/', .colon => ':', .less => '<',
-        .equal => '=', .greater => '>', .qmark => '?',
-        .at => '@', .caret => '^', .grave => '`',
-        .bar => '|', .tilde => '~',
-        .radix => '.', .base_header => '0',
-        .base_binary => 'b', .base_binary_upper => 'B',
-        .base_octal => 'o', .base_octal_upper => 'O',
-        .base_hex => 'x', .base_hex_upper => 'X',
-        .exponent => 'e', .exponent_upper => 'E',
-        else => unreachable
-    };
+    return Value.toChar(self.val);
 }

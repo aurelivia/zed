@@ -16,9 +16,15 @@ pub fn main() !void {
     const src = try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
     defer src.close();
 
-    var lexer: Lexer = try .init(arena.allocator(), src.reader());
+    var read_buffer: [256]u8 = undefined;
+    var file_reader = src.reader(&read_buffer);
+    const reader = &file_reader.interface;
+    var lexer: Lexer = try .init(arena.allocator(), reader);
 
-    const stdout = std.io.getStdOut().writer();
+    var write_buffer: [256]u8 = undefined;
+    var file_writer = std.fs.File.stdout().writer(&write_buffer);
+    var stdout = &file_writer.interface;
 
     try lexer.dump(stdout);
+    try stdout.flush();
 }

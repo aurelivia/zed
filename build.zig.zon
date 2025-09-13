@@ -1,6 +1,7 @@
 .{
-    .name = "zed",
+    .name = .zed,
     .version = "0.0.0",
+    .fingerprint = 0xf4720e3786a7b56a,
     .dependencies = .{},
     .paths = .{
         "build.zig",
