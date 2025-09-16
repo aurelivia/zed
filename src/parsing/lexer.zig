@@ -1,10 +1,11 @@
 const std = @import("std");
-const Token = @import("./token.zig");
+pub const Token = @import("./token.zig");
 
-const Self = @This();
+const Lexer = @This();
 
 pub const LexerError = error {
     ForbiddenWhitespace,
+    ForbiddenChar,
     NoEscape,
     UnexpectedChar,
 
@@ -22,11 +23,11 @@ context: enum {
     none, start_of_line, escape,
     number_whole, number_frac, number_rep, number_exp
 } = .none,
-buffer: std.ArrayList(u21) = .empty,
+buffer: std.ArrayList(u32) = .empty,
 err: ?LexerError = null,
 
 done: bool = false,
-pending: ?u21 = null,
+pending: ?u32 = null,
 peeked: ?Token = null,
 queued: ?Token = null,
 maybe_line: ?Token = null,
@@ -34,20 +35,20 @@ maybe_line: ?Token = null,
 line: usize = 1,
 col: usize = 0,
 
-pub inline fn deinit(self: *Self) void {
+pub inline fn deinit(self: *Lexer) void {
     self.buffer.deinit(self.mem);
 }
 
-pub inline fn init(mem: std.mem.Allocator, src: *std.io.Reader) !Self {
+pub inline fn init(mem: std.mem.Allocator, src: *std.io.Reader) !Lexer {
     return .{ .mem = mem, .source = src };
 }
 
-pub fn fail(self: *Self, e: LexerError) LexerError {
+pub fn fail(self: *Lexer, e: LexerError) LexerError {
     self.err = e;
     return e;
 }
 
-fn nextChar(self: *Self) LexerError!u21 {
+fn nextChar(self: *Lexer) LexerError!u32 {
     if (self.pending) |p| {
         self.pending = null;
         return p;
@@ -67,30 +68,31 @@ fn nextChar(self: *Self) LexerError!u21 {
 
     return switch (c) {
         // Forbidden Whitespace
-        '\t', 0x00A0, 0x180E, 0x2000...0x200D, 0x202F, 0x205F, 0x2060, 0x2800, 0x3000, 0x3164, 0xFEFF =>
+        '\t', 0x0B, 0x00A0, 0x180E, 0x2000...0x200D, 0x202F, 0x205F, 0x2060, 0x2800, 0x3000, 0x3164, 0xFEFF =>
             self.fail(LexerError.ForbiddenWhitespace),
+        0x00...0x08, 0x0C, 0x0E...0x1F, 0x7F => self.fail(LexerError.ForbiddenChar),
         else => c
     };
 }
 
-pub fn peek(self: *Self) LexerError!Token {
+pub fn peek(self: *Lexer) LexerError!Token {
     if (self.err) |e| return e;
     if (self.peeked) |p| return p;
     self.peeked = try self.next();
     return self.peeked;
 }
 
-pub inline fn drop(self: *Self) void {
+pub inline fn drop(self: *Lexer) void {
     if (self.peeked) self.peeked = null;
 }
 
-pub inline fn skip(self: *Self) !void {
+pub inline fn skip(self: *Lexer) !void {
     if (self.peeked) {
         self.peeked = null;
     } else _ = try self.next();
 }
 
-pub fn next(self: *Self) LexerError!Token {
+pub fn next(self: *Lexer) LexerError!Token {
     if (self.err) |e| return e;
     if (self.done) return LexerError.EndOfStream;
 
@@ -236,12 +238,12 @@ pub fn next(self: *Self) LexerError!Token {
                         return raw;
                     }
 
-                    const f: u21 = toLower(c);
-                    const s: u21 = toLower(n);
+                    const f: u32 = toLower(c);
+                    const s: u32 = toLower(n);
                     var t: usize = 2;
 
                     // Otherwise try all the special escapes
-                    var char: ?u21 = null;
+                    var char: ?u32 = null;
                     if (f == 'n' and s == 'l') { // Newline (Equivalent to \lf)
                         char = '\n';
                     } else if (f == 's' and s == 'p') { // Space
@@ -358,7 +360,7 @@ pub fn next(self: *Self) LexerError!Token {
     }
 }
 
-inline fn give(self: *Self, val: Token.Value) Token {
+inline fn give(self: *Lexer, val: Token.Value) Token {
     var t: Token = .{ .val = val, .line = self.line, .col = self.col };
     switch (val) {
         .line => { self.line += 1; self.col = 0; },
@@ -369,7 +371,7 @@ inline fn give(self: *Self, val: Token.Value) Token {
     return t;
 }
 
-inline fn wrap(self: *Self) LexerError!?Token {
+inline fn wrap(self: *Lexer) LexerError!?Token {
     if (self.buffer.items.len == 0) return null;
     return .{
         .val = .{ .literal = self.buffer.items },
@@ -378,27 +380,27 @@ inline fn wrap(self: *Self) LexerError!?Token {
     };
 }
 
-inline fn toLower(c: u21) u21 {
+inline fn toLower(c: u32) u32 {
     return switch (c) {
         'A'...'Z' => c ^ 0x20,
         else => c
     };
 }
 
-inline fn parseDigit(self: *Self, d: u21) Token {
+inline fn parseDigit(self: *Lexer, d: u32) Token {
     return self.give(.{ .digit = switch (d) {
         '0'...'9' => @as(u8, @intCast(d)) ^ 0b00110000,
         else => (@as(u8, @intCast(d)) ^ 0b01000000) + 9
     }});
 }
 
-pub fn formatError(self: *Self) []const u8 {
+pub fn formatError(self: *Lexer) []const u8 {
     switch (self.errored) {
         else => unreachable,
     }
 }
 
-pub fn dump(self: *Self, output: *std.Io.Writer) !void {
+pub fn dump(self: *Lexer, output: *std.Io.Writer) !void {
     try output.writeAll("1: ");
     var buf = [4]u8{ 0, 0, 0, 0 };
     loop: while (true) {
@@ -416,7 +418,7 @@ pub fn dump(self: *Self, output: *std.Io.Writer) !void {
             .literal => |lit| {
                 try output.print("[{}]\"", .{ token.col });
                 for (lit) |l| {
-                    const len = try std.unicode.utf8Encode(l, &buf);
+                    const len = try std.unicode.utf8Encode(@intCast(l), &buf);
                     try output.writeAll(buf[0..len]);
                 }
                 try output.print("\"({})", .{ lit.len });
@@ -428,18 +430,18 @@ pub fn dump(self: *Self, output: *std.Io.Writer) !void {
                     ' ' => try output.writeAll("(␠)"),
                     0x7F => try output.writeAll("(␡)"),
                     0x00...0x1F => {
-                        const len = try std.unicode.utf8Encode(c ^ 0b10010000000000, &buf);
+                        const len = try std.unicode.utf8Encode(@intCast(c ^ 0b10010000000000), &buf);
                         try output.print("({s})", .{ buf[0..len] });
                     },
                     else => {
-                        const len = try std.unicode.utf8Encode(c, &buf);
+                        const len = try std.unicode.utf8Encode(@intCast(c), &buf);
                         try output.writeAll(buf[0..len]);
                     }
                 }
                 try output.print("⟨{X:0>4}⟩", .{ c });
             },
 
-            .digit => try output.print("[{}]{}", .{ token.col, token.toChar() }),
+            .digit => try output.print("[{}]{c}", .{ token.col, @as(u8, @intCast(token.toChar())) }),
 
             .line => {
                 try output.print("[{}]line\n{}: ", .{ token.col, token.line + 1 });
@@ -453,16 +455,51 @@ pub fn dump(self: *Self, output: *std.Io.Writer) !void {
     }
 }
 
-fn printChar(c: u21, output: *std.io.Writer) !void {
+pub fn debugDump(self: *Lexer) void {
+    var buf: [4096]u8 = undefined;
+    const stderr = std.debug.lockStderrWriter(&buf);
+    defer std.debug.unlockStderrWriter();
+    self.dump(stderr) catch return;
+}
+
+pub fn printChar(c: u32, output: *std.io.Writer) !void {
     var buf = [4]u8{ 0, 0, 0, 0 };
-    const len = try std.unicode.utf8Encode(c, &buf);
+    const len = try std.unicode.utf8Encode(@intCast(c), &buf);
     try output.writeAll(buf[0..len]);
 }
 
-fn debugPrintChar(c: u21) void {
+pub fn debugPrintChar(c: u32) void {
     var buf: [4]u8 = undefined;
     const stderr = std.debug.lockStderrWriter(&buf);
     defer std.debug.unlockStderrWriter();
     nosuspend printChar(c, stderr) catch return;
 }
 
+pub fn debugPrintString(str: []const u32) void {
+    var buf: [4]u8 = undefined;
+    const stderr = std.debug.lockStderrWriter(&buf);
+    defer std.debug.unlockStderrWriter();
+    for (str) |c| printChar(c, stderr) catch return;
+}
+
+pub fn debugEncodeString(comptime str: []const u8) [std.unicode.utf8CountCodepoints(str) catch unreachable]u32 {
+    var encoded: [std.unicode.utf8CountCodepoints(str) catch unreachable]u32 = undefined;
+    var view = std.unicode.Utf8View.initComptime(str).iterator();
+    var i: usize = 0;
+    while (view.nextCodepoint()) |c| { encoded[i] = @intCast(c); i += 1; }
+    return encoded;
+}
+
+pub fn createTestLexer(comptime src: []const u8) std.mem.Allocator.Error!*Lexer {
+    const reader: *std.io.Reader = try std.testing.allocator.create(std.io.Reader);
+    reader.* = std.io.Reader.fixed(src);
+    const lexer: *Lexer = try std.testing.allocator.create(Lexer);
+    lexer.* = try .init(std.testing.allocator, reader);
+    return lexer;
+}
+
+pub fn destroyTestLexer(lexer: *Lexer) void {
+    std.testing.allocator.destroy(lexer.source);
+    lexer.deinit();
+    std.testing.allocator.destroy(lexer);
+}

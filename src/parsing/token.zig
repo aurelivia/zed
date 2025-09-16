@@ -5,8 +5,10 @@ const Self = @This();
 pub const Value = union (enum) {
     eof,
     whitespace: usize,
-    literal: []u21,
-    char: u21,
+    /// NOTE: THIS SLICE IS VOLATILE, AND IS INVALIDATED WHEN Lexer.next() IS CALLED.
+    /// THE SLICE MUST BE COPIED TO BE PRESERVED.
+    literal: []u32,
+    char: u32,
     digit: u8,
 
     // Delimiters
@@ -31,11 +33,11 @@ pub const Value = union (enum) {
     base_binary, base_octal, base_hex,
     exponent, repeat,
 
-    pub fn toChar(self: Value) u21 {
+    pub fn toChar(self: Value) u32 {
         return switch (self) {
             .digit => |d| switch (d) {
-                0...9 => @as(u21, @intCast(d & 0b00110000)),
-                else => @as(u21, @intCast((d -| 9) & 0b01000000))
+                0...9 => @as(u32, @intCast(d | 0b00110000)),
+                else => @as(u32, @intCast((d -| 9) | 0b01000000))
             },
             .line => '\n',
             .semicolon => ';', .comment => '#',
@@ -80,7 +82,7 @@ pub fn deinit(self: *Self, mem: std.mem.Allocator) void {
     }
 }
 
-pub fn singleton(char: u21) ?Self.Value {
+pub fn singleton(char: u32) ?Self.Value {
     return switch (char) {
         ' ' => .{ .whitespace = 1 }, '\n' => .line,
         ';' => .semicolon, '#' => .comment,
@@ -98,6 +100,6 @@ pub fn singleton(char: u21) ?Self.Value {
     };
 }
 
-pub fn toChar(self: *const Self) u21 {
+pub fn toChar(self: Self) u32 {
     return Value.toChar(self.val);
 }

@@ -1,91 +1,58 @@
 const std = @import("std");
+const Tree = @import("../../tree.zig").Tree;
+
 const Lexer = @import("../lexer.zig");
-const ParseContext = @import("../parse_context.zig");
-const ParseError = ParseContext.ParseError;
-const Any = @import("../syntax.zig").Any;
+const Parser = @import("../parser.zig");
 
-const Self = @This();
-
-pub const Value = union (enum) {
-    literal: []const u21,
-    expr: Any,
-
-    pub fn deinit(self: Value, mem: std.mem.Allocator) void {
-        switch (self) {
-            .literal => |l| mem.free(l),
-            .expr => |e| e.deinit(mem)
-        }
-    }
-};
-
-val: Value,
-next: ?*Self = null,
-
-pub fn deinit(self: *Self, mem: std.mem.Allocator) void {
-    self.val.deinit(mem);
-    if (self.next) |*next| next.deinit(mem);
-}
-
-fn append(ctx: *ParseContext, start: usize, s: *usize, char: u21) !void {
-    try ctx.string_buf.ensureTotalCapacity(start + s.*);
-    ctx.string_buf.items[start + s.*] = char;
-    s.* += 1;
-}
-
-pub fn parse(ctx: *ParseContext, single_quote: bool) ParseError!Self {
+pub fn parse(ctx: *Parser, single_quote: bool) Parser.Error!Tree.Branch.Tagged {
     const start: usize = ctx.string_buf.items.len;
-    var s: usize = start;
-
-    defer {
-        ctx.string_buf.items.len = start;
-    }
+    var s: usize = 0;
 
     while (true) {
-        const n = ctx.next();
-        switch (n) {
-            .eof => return ParseError.UnexpectedEOF,
+        const next = try ctx.next();
+        switch (next.val) {
+            .eof, .line => return ctx.err(next, Parser.Error.UnterminatedString),
 
             .single_quote, .double_quote => {
-                if ((n == .single_quote and single_quote) or (n == .double_quote and !single_quote)) {
-                    const val: []u21 = try ctx.mem.alloc(u21, start + s);
-                    @memcpy(val, ctx.string_buf.items[start..s]);
-                    return .{
-                        .val = .{ .literal = val },
-                        .next = null
-                    };
-                } else try append(ctx, start, &s, Lexer.Token.toChar(n));
+                if ((next.val == .single_quote and single_quote) or (next.val == .double_quote and !single_quote)) {
+                    const str = ctx.string_buf.items[start..];
+                    ctx.string_buf.items.len = start;
+                    return try ctx.store(str);
+                } else try append(ctx, start, &s, Lexer.Token.toChar(next));
+            },
+
+            .whitespace => |wsp| {
+                const slice = try ctx.string_buf.addManyAt(ctx.mem, start + s, wsp);
+                @memset(slice, ' ');
+                s += wsp;
             },
 
             .literal => |l| {
-                try ctx.string_buf.ensureTotalCapacity(start + s + l.len);
-                @memcpy(ctx.string_buf.items[(start + s)..(start + s + l.len)], l);
+                const slice = try ctx.string_buf.addManyAt(ctx.mem, start + s, l.len);
+                @memcpy(slice, l);
                 s += l.len;
             },
 
             .char => |c| try append(ctx, start, &s, c),
 
-            .number => |num| {
-                try ctx.string_buf.ensureTotalCapacity(start + s + num.len);
-                for (num, 0..) |d, i| ctx.string_buf.items[start + s + i] = d.src;
-                s += num.len;
-            },
-
-            .dollar => {
-                const val: []u21 = try ctx.mem.alloc(u21, start + s);
-                @memcpy(val, ctx.string_buf.items[start..s]);
-                ctx.string_buf.items.len = start;
-                return .{
-                    .val = val,
-                    .next = try parseExpr(&ctx, single_quote)
-                };
-            },
-
-            else => |c| try append(ctx, start, &s, Lexer.Token.toChar(c))
+            else => |c| try append(ctx, start, &s, Lexer.Token.Value.toChar(c))
         }
     }
 }
 
-pub fn parseExpr(ctx: *ParseContext, single_quote: bool) !Self {
+fn append(ctx: *Parser, start: usize, s: *usize, char: u32) !void {
+    try ctx.string_buf.insert(ctx.mem, start + s.*, char);
+    s.* += 1;
+}
 
+test "Parsing: String" {
+    // Omitting starting quote, as that triggers the context
+    const parser: *Parser = try .createTestParser("this is a \\nl string! 12345\'");
+    defer parser.destroyTestParser();
 
+    const result = try parse(parser, true);
+
+    try std.testing.expectEqualSlices(u32, parser.literals.lits.items[0], &Lexer.debugEncodeString("this is a \n string! 12345"));
+    try std.testing.expectEqual(.literal, result[0]);
+    try std.testing.expectEqual(0, result[1].literal);
 }
