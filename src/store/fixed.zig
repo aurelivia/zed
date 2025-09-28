@@ -1,15 +1,6 @@
 const std = @import("std");
 
-pub fn AutoContext(comptime T: type) type { return struct {
-    pub fn compare(a: T, b: T) std.math.Order {
-        return std.math.order(a, b);
-    }
-    pub fn midpoint(a: T, b: T) T {
-        return (a + b) / 2;
-    }
-};}
-
-pub fn Store(comptime T: type, comptime Context: type) type { return struct {
+pub fn Store(comptime T: type) type { return struct {
     pub const Pivot = struct {
         value: []const T,
         index: ?usize = null,
@@ -70,7 +61,7 @@ pub fn Store(comptime T: type, comptime Context: type) type { return struct {
             const min: usize = @min(root.value.len, lit.len);
             // Attempt to find a common prefix between root.value and lit
             const order: std.math.Order = while (index < min): (index += 1) {
-                const cmp = Context.compare(root.value[index], lit[index]);
+                const cmp = std.math.order(root.value[index], lit[index]);
                 if (cmp != .eq) break cmp;
             // Fallthroughs in the event that one is entirely contained within the other
             } else if (lit.len < root.value.len) { // lit is a prefix of root.value
@@ -92,7 +83,7 @@ pub fn Store(comptime T: type, comptime Context: type) type { return struct {
                     if (root.right) |r| {
                         @branchHint(.likely);
                         const left, const parent_left = getBound(l, index, true);
-                        switch (Context.compare(left.value[index], lit[index])) {
+                        switch (std.math.order(left.value[index], lit[index])) {
                             .gt => {
                                 parent = root;
                                 root = l; upper = false;
@@ -107,7 +98,7 @@ pub fn Store(comptime T: type, comptime Context: type) type { return struct {
                             else => {}
                         }
                         const right, const parent_right = getBound(r, index, false);
-                        switch (Context.compare(right.value[index], lit[index])) {
+                        switch (std.math.order(right.value[index], lit[index])) {
                             .lt => {
                                 parent = root;
                                 root = r; upper = true;
@@ -122,12 +113,12 @@ pub fn Store(comptime T: type, comptime Context: type) type { return struct {
                             else => {}
                         }
                         parent = root;
-                        const mid: T = Context.midpoint(left.value[index], right.value[index]);
-                        if (Context.compare(mid, lit[index]) == .lt) {
+                        const mid: T = (left.value[index] + right.value[index]) / 2;
+                        if (std.math.order(mid, lit[index]) == .lt) {
                             root = r; upper = true;
                         } else { root = l; upper = false; }
                         continue :outer;
-                    } else if (l.value.len == index or (Context.compare(l.value[index], lit[index]) == .lt)) {
+                    } else if (l.value.len == index or (std.math.order(l.value[index], lit[index]) == .lt)) {
                         // Test: Append on One, Greater
                         root.right = try self.makePivot(lit);
                         return root.right.?.index.?;

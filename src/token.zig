@@ -60,11 +60,10 @@ pub const Value = union (enum) {
 
     pub fn isOperator(self: Value) bool {
         return switch (self) {
-            .dot, .exclam, .dollar,
+            .exclam, .dollar,
             .percent, .ampersand, .star,
-            .plus, .comma, .minus,
-            .slash, .colon, .less,
-            .equal, .greater, .qmark,
+            .plus, .minus, .slash, .colon,
+            .less, .equal, .greater, .qmark,
             .at, .caret, .bar, .tilde => true,
             else => false
         };
@@ -100,6 +99,10 @@ pub fn singleton(char: u32) ?Self.Value {
     };
 }
 
-pub fn toChar(self: Self) u32 {
+pub inline fn toChar(self: Self) u32 {
     return Value.toChar(self.val);
+}
+
+pub inline fn isOperator(self: Self) bool {
+    return Value.isOperator(self.val);
 }
