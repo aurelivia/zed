@@ -4,7 +4,6 @@ const Allocator = std.mem.Allocator;
 
 const Any = @import("./any.zig").Any;
 const Builtin = @import("./builtin.zig");
-const Runtime = @import("./runtime.zig");
 const Literal = @import("./literal.zig");
 const Path = @import("./path.zig").Path;
 const Expression = @import("./expression.zig").Expression;
