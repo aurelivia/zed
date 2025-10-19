@@ -1,8 +1,15 @@
 const std = @import("std");
-pub const Store = @import("./store.zig").Store;
-pub const Tree = @import("./tree.zig");
+const Allocator = std.mem.Allocator;
 
-pub const Lexer = @import("./parsing/lexer.zig");
-pub const Parser = @import("./parsing/parser.zig");
 
-test { std.testing.refAllDecls(@This()); }
+
+const Any = @import("./any.zig").Any;
+
+pub var mem: Allocator = undefined;
+
+pub fn deinit() void {
+}
+
+pub fn init(m: Allocator) Allocator.Error!void {
+    mem = m;
+}

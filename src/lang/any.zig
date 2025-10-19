@@ -13,9 +13,12 @@ const Set = @import("./set.zig");
 const List = @import("./list.zig");
 
 pub const Any = packed struct (u64) {
-    pub const Type = enum (u3) {
-        smallint = 0,
+    pub const Type = enum (u4) {
+        builtin = 0, // Set to zero to share space with Inf
 
+        int = 1,
+
+        err = 0b1111 // Set to max to share space with NaN
     };
 
     pub const index_bits = 48;
@@ -23,23 +26,16 @@ pub const Any = packed struct (u64) {
 
     const max_exp: u11 = std.math.maxInt(u11);
 
-    float_sign: u1 = 0,
+    sign_bit: u1 = 0,
     float_exp: u11 = max_exp,
-    float_check_bit: u1 = 1,
     type: Type,
     index: Index,
 
     pub inline fn isFloat(self: Any) bool {
-        return if (self.float_exp == max_exp) self.float_check_bit == 0 else true;
+        return (@as(u64, @bitCast(self)) == std.math.maxInt(u64)) or self.float_exp != max_exp or (self.type == .builtin and self.index == 0);
     }
 
-    const norm_nan: Any = .{
-        .float_sign = 0,
-        .float_exp = max_exp,
-        .float_check_bit = 0,
-        .type = @enumFromInt(0b010), // Note: 0b100 here would be a signal nan, which we do not want.
-        .index = 0
-    };
+    const norm_nan: Any = @as(Any, @bitCast(std.math.maxInt(u64)));
 
     comptime {
         if (@as(f64, @bitCast(norm_nan)) == std.math.snan(f64)) {
@@ -65,7 +61,7 @@ pub const Any = packed struct (u64) {
             .int => |int| if (int.bits > index_bits) {
                 std.debug.print("Attempt to store integer as smallint wider than available bits.\n", .{});
                 unreachable;
-            } else return .{ .type = .smallint, .index = @as(Index, @bitCast(i)) },
+            } else return .{ .sign_bit = int.signedness == .signed, .type = .smallint, .index = @as(Index, @bitCast(i)) },
             else => @compileError(@typeName(@TypeOf(i)) ++ " is not an integer type.")
         }
     }
@@ -91,6 +87,8 @@ pub const Any = packed struct (u64) {
         switch (@typeInfo(T)) {
             .int => |int| if (int.bits > index_bits) {
                 return @as(T, @intFromFloat(self.toFloat()));
+            } else if (self.sign_bit and int.signedness != .signed) {
+                unreachable;
             } else return @as(T, @intCast(self.index)),
             else => @compileError(@typeName(T) ++ " is not an integer type.")
         }
