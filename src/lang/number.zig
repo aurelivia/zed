@@ -11,14 +11,14 @@ const Any = @import("./any.zig").Any;
 const Error = @import("./error.zig");
 
 pub fn parse(lex: *Lexer, negative: bool) OOM!Any {
-    var scope: Error = .init(lex);
-    const parsed = tryParse(&scope, lex, negative) catch |e| try Error.parse(scope, e);
-    if (parsed.type != .err and scope.err != null) return try Error.store(scope);
+    var scope: Error = try .init(lex);
+    if (scope.err != null) return try Error.store(scope);
+    const parsed = tryParse(&scope, lex, negative) catch |e| return try Error.parse(scope, lex, e);
+    if (scope.err != null or scope.next != null) unreachable;
     return parsed;
 }
 
 pub fn tryParse(scope: *Error, lex: *Lexer, negative: bool) Error.ParseError!Any {
-pub fn parse(lex: *Lexer, negative: bool) !Any {
     var mode: enum { whole, fraction, exponent } = .whole;
 
     var is_int: bool = true;
@@ -33,13 +33,13 @@ pub fn parse(lex: *Lexer, negative: bool) !Any {
     while (true) {
         const next = try lex.peek();
         switch (next.val) {
-            .base_header => lex.toss(), // Ignored
-            .base_binary => { lex.toss(); base_int = 2; base_float = 2.0; offset = 2.0; },
-            .base_octal  => { lex.toss(); base_int = 8; base_float = 8.0; offset = 8.0; },
-            .base_hex    => { lex.toss(); base_int = 16; base_float = 16.0; offset = 16.0; },
+            .base_header => scope.advance(lex), // Ignored
+            .base_binary => { scope.advance(lex); base_int = 2; base_float = 2.0; offset = 2.0; },
+            .base_octal  => { scope.advance(lex); base_int = 8; base_float = 8.0; offset = 8.0; },
+            .base_hex    => { scope.advance(lex); base_int = 16; base_float = 16.0; offset = 16.0; },
 
             .digit => |d| {
-                lex.toss();
+                scope.advance(lex);
                 if (d > base_int) {
                     scope.err = error.DigitExceedsBase;
                     continue;
@@ -67,7 +67,7 @@ pub fn parse(lex: *Lexer, negative: bool) !Any {
             },
 
             .radix => {
-                lex.toss();
+                scope.advance(lex);
                 mode = .fraction;
                 if (is_int) {
                     is_int = false;
@@ -76,11 +76,11 @@ pub fn parse(lex: *Lexer, negative: bool) !Any {
             },
 
             .exponent => {
-                lex.toss();
-                const maybe_sign = lex.peek() catch return try lex.getError();
+                scope.advance(lex);
+                const maybe_sign = try lex.peek();
                 switch (maybe_sign.val) {
-                    .minus => { lex.toss(); neg_exp = true; },
-                    .plus => lex.toss(),
+                    .minus => { scope.advance(lex); neg_exp = true; },
+                    .plus => scope.advance(lex),
                     else => {}
                 }
 

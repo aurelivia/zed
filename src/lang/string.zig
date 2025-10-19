@@ -15,8 +15,8 @@ pub const Store = @import("olib-collections").RadixTable;
 
 pub fn parse(lex: *Lexer, double_quote: bool) OOM!Any {
     var scope: Error = .init(lex);
-    const parsed = tryParse(&scope, lex, double_quote) catch |e| try Error.parse(scope, lex, e);
-    if (parsed.type != .err and scope.err != null) return try Error.store(scope);
+    const parsed = tryParse(&scope, lex, double_quote) catch |e| return try Error.parse(scope, lex, e);
+    if (scope.err != null or scope.next != null) return try Error.store(scope);
     return parsed;
 }
 

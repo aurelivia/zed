@@ -17,6 +17,8 @@ pub const Any = packed struct (u64) {
         builtin = 0, // Set to zero to share space with Inf
 
         int = 1,
+        literal = 2,
+        string = 3,
 
         err = 0b1111 // Set to max to share space with NaN
     };

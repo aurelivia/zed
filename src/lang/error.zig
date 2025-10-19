@@ -11,6 +11,8 @@ const Any = @import("./any.zig").Any;
 
 pub const ParseError = error {
     LexerError,
+    DigitExceedsBase,
+    UnterminatedString,
 } || OOM;
 
 pub const Store = @import("olib-collections").Table(@This(), Any.Index);
