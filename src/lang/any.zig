@@ -19,6 +19,7 @@ pub const Any = packed struct (u64) {
         int = 1,
         literal = 2,
         string = 3,
+        expr = 4,
 
         err = 0b1111 // Set to max to share space with NaN
     };

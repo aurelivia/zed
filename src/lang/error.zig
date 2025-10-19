@@ -13,6 +13,7 @@ pub const ParseError = error {
     LexerError,
     DigitExceedsBase,
     UnterminatedString,
+    UnterminatedExpression
 } || OOM;
 
 pub const Store = @import("olib-collections").Table(@This(), Any.Index);
