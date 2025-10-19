@@ -1,7 +1,16 @@
+const Lexer = @This();
 const std = @import("std");
+const log = std.log.scoped(.zed);
+const Allocator = std.mem.Allocator;
+
+const root = @import("./root.zig");
+const mem = root.mem;
+const buffers = @import("../buffers.zig");
+
 pub const Token = @import("./token.zig");
 
-const Lexer = @This();
+const Any = @import("./lang/any.zig");
+const Error = @import("./lang/error.zig");
 
 pub const LexerError = error {
     ForbiddenWhitespace,
@@ -17,30 +26,33 @@ pub const LexerError = error {
 } || std.io.Reader.Error
   || std.mem.Allocator.Error;
 
-mem: std.mem.Allocator,
 source: *std.io.Reader,
+buffer: std.ArrayList(u8),
+
 context: enum {
     none, start_of_line, escape,
     number_whole, number_frac, number_rep, number_exp
 } = .none,
-buffer: std.ArrayList(u32) = .empty,
 err: ?LexerError = null,
-
 done: bool = false,
 pending: ?u32 = null,
 peeked: ?Token = null,
 queued: ?Token = null,
 maybe_line: ?Token = null,
+
 // Lines & Columns are 1-based, however col is incremented by character get, so starts 0
 line: usize = 1,
 col: usize = 0,
 
 pub inline fn deinit(self: *Lexer) void {
-    self.buffer.deinit(self.mem);
+    buffers.release(self.buffer);
 }
 
-pub inline fn init(mem: std.mem.Allocator, src: *std.io.Reader) !Lexer {
-    return .{ .mem = mem, .source = src };
+pub inline fn init(src: *std.io.Reader) Lexer {
+    return .{
+        .source = src,
+        .buffer = buffers.get(u8)
+    };
 }
 
 pub fn fail(self: *Lexer, e: LexerError) LexerError {
@@ -186,7 +198,7 @@ pub fn next(self: *Lexer) LexerError!Token {
                                 else => { self.pending = n; return digit; }
                             }
                         } else continue :context .number_whole;
-                    } else try self.buffer.append(self.mem, c);
+                    } else try self.buffer.append(mem, @as(u8, @truncate(c)));
                 },
 
                 // Try reserved characters/operators
@@ -196,7 +208,9 @@ pub fn next(self: *Lexer) LexerError!Token {
                         return t;
                     } else return self.give(s);
                 } else { // Any other character goes on the literal buffer
-                    try self.buffer.append(self.mem, c);
+                    const bytes: [3]u8 = undefined;
+                    const len = try std.unicode.utf8Encode(c, bytes);
+                    try self.buffer.appendSlice(mem, bytes[0..len]);
                 }
             },
 
@@ -238,8 +252,8 @@ pub fn next(self: *Lexer) LexerError!Token {
                         return raw;
                     }
 
-                    const f: u32 = toLower(c);
-                    const s: u32 = toLower(n);
+                    const f: u21 = toLower(c);
+                    const s: u21 = toLower(n);
                     var t: usize = 2;
 
                     // Otherwise try all the special escapes
@@ -360,7 +374,7 @@ pub fn next(self: *Lexer) LexerError!Token {
     }
 }
 
-inline fn give(self: *Lexer, val: Token.Value) Token {
+fn give(self: *Lexer, val: Token.Value) Token {
     var t: Token = .{ .val = val, .line = self.line, .col = self.col };
     switch (val) {
         .line => { self.line += 1; self.col = 0; },
@@ -371,23 +385,23 @@ inline fn give(self: *Lexer, val: Token.Value) Token {
     return t;
 }
 
-inline fn wrap(self: *Lexer) LexerError!?Token {
+fn wrap(self: *Lexer) LexerError!?Token {
     if (self.buffer.items.len == 0) return null;
     return .{
         .val = .{ .literal = self.buffer.items },
         .line = self.line,
-        .col = self.col - self.buffer.items.len
+        .col = self.col - (std.unicode.utf8CountCodepoints(self.buffer.items) catch unreachable)
     };
 }
 
-inline fn toLower(c: u32) u32 {
+fn toLower(c: u21) u21 {
     return switch (c) {
         'A'...'Z' => c ^ 0x20,
         else => c
     };
 }
 
-inline fn parseDigit(self: *Lexer, d: u32) Token {
+fn parseDigit(self: *Lexer, d: u21) Token {
     return self.give(.{ .digit = switch (d) {
         '0'...'9' => @as(u8, @intCast(d)) ^ 0b00110000,
         else => (@as(u8, @intCast(d)) ^ 0b01000000) + 9
