@@ -1,5 +1,6 @@
 const std = @import("std");
 const log = std.log.scoped(.zed);
+const OOM = error.OutOfMemory;
 
 const root = @import("./root.zig");
 const mem = root.mem;
@@ -7,7 +8,16 @@ const mem = root.mem;
 const Lexer = @import("../lexer.zig");
 
 const Any = @import("./any.zig").Any;
+const Error = @import("./error.zig");
 
+pub fn parse(lex: *Lexer, negative: bool) OOM!Any {
+    var scope: Error = .init(lex);
+    const parsed = tryParse(&scope, lex, negative) catch |e| try Error.parse(scope, e);
+    if (parsed.type != .err and scope.err != null) return try Error.store(scope);
+    return parsed;
+}
+
+pub fn tryParse(scope: *Error, lex: *Lexer, negative: bool) Error.ParseError!Any {
 pub fn parse(lex: *Lexer, negative: bool) !Any {
     var mode: enum { whole, fraction, exponent } = .whole;
 

@@ -2,6 +2,7 @@ const Lexer = @This();
 const std = @import("std");
 const log = std.log.scoped(.zed);
 const Allocator = std.mem.Allocator;
+const OOM = error.OutOfMemory;
 
 const root = @import("./root.zig");
 const mem = root.mem;
@@ -41,8 +42,10 @@ queued: ?Token = null,
 maybe_line: ?Token = null,
 
 // Lines & Columns are 1-based, however col is incremented by character get, so starts 0
-line: usize = 1,
-col: usize = 0,
+start_line: usize = 1,
+start_col: usize = 0,
+cur_line: usize = 1,
+cur_col: usize = 0,
 
 pub inline fn deinit(self: *Lexer) void {
     buffers.release(self.buffer);
@@ -55,9 +58,13 @@ pub inline fn init(src: *std.io.Reader) Lexer {
     };
 }
 
-pub fn fail(self: *Lexer, e: LexerError) LexerError {
-    self.err = e;
-    return e;
+pub inline fn getError(self: *Lexer) OOM!Any {
+    return try Error.parse(.{
+        .start_line = self.start_line,
+        .start_col = self.start_col,
+        .end_line = self.cur_line,
+        .end_col = self.cur_col
+    }, self.err.?);
 }
 
 fn nextChar(self: *Lexer) LexerError!u32 {
@@ -66,7 +73,7 @@ fn nextChar(self: *Lexer) LexerError!u32 {
         return p;
     }
 
-    self.col += 1;
+    self.cur_col += 1;
 
     const b = self.source.peekByte() catch { return 3; }; // ASCII End-Of-Text, because we can't switch on optionals
     const l = try std.unicode.utf8ByteSequenceLength(b);
@@ -81,32 +88,42 @@ fn nextChar(self: *Lexer) LexerError!u32 {
     return switch (c) {
         // Forbidden Whitespace
         '\t', 0x0B, 0x00A0, 0x180E, 0x2000...0x200D, 0x202F, 0x205F, 0x2060, 0x2800, 0x3000, 0x3164, 0xFEFF =>
-            self.fail(LexerError.ForbiddenWhitespace),
-        0x00...0x08, 0x0C, 0x0E...0x1F, 0x7F => self.fail(LexerError.ForbiddenChar),
+            error.LexerError.ForbiddenWhitespace,
+        0x00...0x08, 0x0C, 0x0E...0x1F, 0x7F => error.LexerError.ForbiddenChar,
         else => c
     };
 }
 
-pub fn peek(self: *Lexer) LexerError!Token {
+pub inline fn peek(self: *Lexer) error{LexerError}!Token {
+    return self.tryPeek() catch |e| {
+        self.err = e;
+        return error.LexerError;
+    };
+}
+
+pub fn tryPeek(self: *Lexer) LexerError!Token {
     if (self.err) |e| return e;
     if (self.peeked) |p| return p;
-    self.peeked = try self.next();
+    self.peeked = try self.tryNext();
     return self.peeked;
 }
 
-pub inline fn drop(self: *Lexer) void {
-    if (self.peeked) self.peeked = null;
-}
-
-pub inline fn skip(self: *Lexer) !void {
-    if (self.peeked) {
+pub inline fn toss(self: *Lexer) void {
+    if (self.peeked != null) {
         self.peeked = null;
-    } else _ = try self.next();
+    } else _ = self.tryNext() catch return;
 }
 
-pub fn next(self: *Lexer) LexerError!Token {
+pub inline fn next(self: *Lexer) error{LexerError}!Token {
+    return self.tryNext() catch |e| {
+        self.err = e;
+        return error.LexerError;
+    };
+}
+
+pub fn tryNext(self: *Lexer) LexerError!Token {
     if (self.err) |e| return e;
-    if (self.done) return LexerError.EndOfStream;
+    if (self.done) unreachable; // Tried to read after already being given .eof
 
     if (self.peeked) |p| {
         self.peeked = null;
@@ -119,6 +136,9 @@ pub fn next(self: *Lexer) LexerError!Token {
     }
 
     self.buffer.clearRetainingCapacity();
+
+    self.start_line = self.cur_line;
+    self.start_col = self.cur_col + 1;
 
     while (true) {
         const c = try self.nextChar();
@@ -335,7 +355,7 @@ pub fn next(self: *Lexer) LexerError!Token {
 
                     if (char) |ch| {
                         var cc = self.give(.{ .char = ch });
-                        cc.col = self.col - t;
+                        cc.col = self.cur_col - t;
                         n = try self.nextChar();
                         if (Token.singleton(n)) |v| {
                             self.queued = self.give(v);
@@ -343,8 +363,8 @@ pub fn next(self: *Lexer) LexerError!Token {
                         } else if (n == '\\') {
                             self.context = .escape;
                             return cc;
-                        } else return self.fail(LexerError.NoEscape);
-                    } else return self.fail(LexerError.NoEscape);
+                        } else return error.LexerError.NoEscape;
+                    } else return error.LexerError.NoEscape;
                 }
             },
 
@@ -353,7 +373,7 @@ pub fn next(self: *Lexer) LexerError!Token {
                 '.' => if (self.context == .number_whole) {
                     self.context = .number_frac;
                     return self.give(.radix);
-                } else return self.fail(LexerError.UnexpectedChar),
+                } else return error.LexerError.UnexpectedChar,
                 'e' => if (self.context == .number_whole or self.context == .number_frac) {
                     self.context = .number_exp;
                     const n = try self.nextChar();
@@ -366,7 +386,7 @@ pub fn next(self: *Lexer) LexerError!Token {
                 'r' => if (self.context == .number_whole or self.context == .number_frac) {
                     self.context = .number_rep;
                     return self.give(.repeat);
-                } else return self.fail(LexerError.UnexpectedChar),
+                } else return error.LexerError.UnexpectedChar,
                 '0'...'9', 'A'...'F' => return self.parseDigit(c),
                 else => continue :context .none
             },
@@ -375,9 +395,9 @@ pub fn next(self: *Lexer) LexerError!Token {
 }
 
 fn give(self: *Lexer, val: Token.Value) Token {
-    var t: Token = .{ .val = val, .line = self.line, .col = self.col };
+    var t: Token = .{ .val = val, .line = self.cur_line, .col = self.cur_col };
     switch (val) {
-        .line => { self.line += 1; self.col = 0; },
+        .line => { self.cur_line += 1; self.cur_col = 0; },
         .char => t.col -= 1,
         .whitespace => |w| t.col = t.col - (w -| 1),
         else => {}
@@ -389,8 +409,8 @@ fn wrap(self: *Lexer) LexerError!?Token {
     if (self.buffer.items.len == 0) return null;
     return .{
         .val = .{ .literal = self.buffer.items },
-        .line = self.line,
-        .col = self.col - (std.unicode.utf8CountCodepoints(self.buffer.items) catch unreachable)
+        .line = self.cur_line,
+        .col = self.cur_col - (std.unicode.utf8CountCodepoints(self.buffer.items) catch unreachable)
     };
 }
 
@@ -406,12 +426,6 @@ fn parseDigit(self: *Lexer, d: u21) Token {
         '0'...'9' => @as(u8, @intCast(d)) ^ 0b00110000,
         else => (@as(u8, @intCast(d)) ^ 0b01000000) + 9
     }});
-}
-
-pub fn formatError(self: *Lexer) []const u8 {
-    switch (self.errored) {
-        else => unreachable,
-    }
 }
 
 pub fn dump(self: *Lexer, output: *std.Io.Writer) !void {
