@@ -2,7 +2,10 @@
     .name = .zed,
     .version = "0.0.0",
     .fingerprint = 0xf4720e3786a7b56a,
-    .dependencies = .{},
+    .dependencies = .{
+        .collections = .{ .path = "../olib-collections" },
+        .terminal = .{ .path = "../olib-terminal" },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

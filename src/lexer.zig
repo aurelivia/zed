@@ -2,15 +2,14 @@ const Lexer = @This();
 const std = @import("std");
 const log = std.log.scoped(.zed);
 const Allocator = std.mem.Allocator;
-const OOM = error.OutOfMemory;
+const OOM = error{OutOfMemory};
 
 const root = @import("./root.zig");
-const mem = root.mem;
-const buffers = @import("../buffers.zig");
+const buffers = @import("./buffers.zig");
 
 pub const Token = @import("./token.zig");
 
-const Any = @import("./lang/any.zig");
+const Any = @import("./lang/any.zig").Any;
 const Error = @import("./lang/error.zig");
 
 pub const LexerError = error {
@@ -25,7 +24,7 @@ pub const LexerError = error {
     Utf8ExpectedContinuation,
     Utf8OverlongEncoding
 } || std.io.Reader.Error
-  || std.mem.Allocator.Error;
+  || Allocator.Error;
 
 source: *std.io.Reader,
 buffer: std.ArrayList(u8),
@@ -36,7 +35,7 @@ context: enum {
 } = .none,
 err: ?LexerError = null,
 done: bool = false,
-pending: ?u32 = null,
+pending: ?u21 = null,
 peeked: ?Token = null,
 queued: ?Token = null,
 maybe_line: ?Token = null,
@@ -59,15 +58,16 @@ pub inline fn init(src: *std.io.Reader) Lexer {
 }
 
 pub inline fn getError(self: *Lexer) OOM!Any {
-    return try Error.parse(.{
+    return try Error.store(.{
+        .err = self.err,
         .start_line = self.start_line,
         .start_col = self.start_col,
         .end_line = self.cur_line,
         .end_col = self.cur_col
-    }, self.err.?);
+    });
 }
 
-fn nextChar(self: *Lexer) LexerError!u32 {
+fn nextChar(self: *Lexer) LexerError!u21 {
     if (self.pending) |p| {
         self.pending = null;
         return p;
@@ -88,8 +88,8 @@ fn nextChar(self: *Lexer) LexerError!u32 {
     return switch (c) {
         // Forbidden Whitespace
         '\t', 0x0B, 0x00A0, 0x180E, 0x2000...0x200D, 0x202F, 0x205F, 0x2060, 0x2800, 0x3000, 0x3164, 0xFEFF =>
-            error.LexerError.ForbiddenWhitespace,
-        0x00...0x08, 0x0C, 0x0E...0x1F, 0x7F => error.LexerError.ForbiddenChar,
+            error.ForbiddenWhitespace,
+        0x00...0x08, 0x0C, 0x0E...0x1F, 0x7F => error.ForbiddenChar,
         else => c
     };
 }
@@ -105,7 +105,7 @@ pub fn tryPeek(self: *Lexer) LexerError!Token {
     if (self.err) |e| return e;
     if (self.peeked) |p| return p;
     self.peeked = try self.tryNext();
-    return self.peeked;
+    return self.peeked.?;
 }
 
 pub inline fn toss(self: *Lexer) void {
@@ -123,7 +123,6 @@ pub inline fn next(self: *Lexer) error{LexerError}!Token {
 
 pub fn tryNext(self: *Lexer) LexerError!Token {
     if (self.err) |e| return e;
-    if (self.done) unreachable; // Tried to read after already being given .eof
 
     if (self.peeked) |p| {
         self.peeked = null;
@@ -135,6 +134,7 @@ pub fn tryNext(self: *Lexer) LexerError!Token {
         return val;
     }
 
+    if (self.done) unreachable; // Tried to read after already being given .eof
     self.buffer.clearRetainingCapacity();
 
     self.start_line = self.cur_line;
@@ -147,7 +147,11 @@ pub fn tryNext(self: *Lexer) LexerError!Token {
             .none => switch (c) {
                 3 => {
                     self.done = true;
-                    return self.give(.eof);
+                    const wrapped = try self.wrap();
+                    if (wrapped) |t| {
+                        self.queued = self.give(.eof);
+                        return t;
+                    } else return self.give(.eof);
                 },
 
                 // Whitespace
@@ -218,7 +222,7 @@ pub fn tryNext(self: *Lexer) LexerError!Token {
                                 else => { self.pending = n; return digit; }
                             }
                         } else continue :context .number_whole;
-                    } else try self.buffer.append(mem, @as(u8, @truncate(c)));
+                    } else try self.buffer.append(root.mem, @as(u8, @truncate(c)));
                 },
 
                 // Try reserved characters/operators
@@ -228,9 +232,9 @@ pub fn tryNext(self: *Lexer) LexerError!Token {
                         return t;
                     } else return self.give(s);
                 } else { // Any other character goes on the literal buffer
-                    const bytes: [3]u8 = undefined;
-                    const len = try std.unicode.utf8Encode(c, bytes);
-                    try self.buffer.appendSlice(mem, bytes[0..len]);
+                    var bytes: [3]u8 = undefined;
+                    const len = std.unicode.utf8Encode(c, &bytes) catch unreachable;
+                    try self.buffer.appendSlice(root.mem, bytes[0..len]);
                 }
             },
 
@@ -277,7 +281,7 @@ pub fn tryNext(self: *Lexer) LexerError!Token {
                     var t: usize = 2;
 
                     // Otherwise try all the special escapes
-                    var char: ?u32 = null;
+                    var char: ?u21 = null;
                     if (f == 'n' and s == 'l') { // Newline (Equivalent to \lf)
                         char = '\n';
                     } else if (f == 's' and s == 'p') { // Space
@@ -363,8 +367,8 @@ pub fn tryNext(self: *Lexer) LexerError!Token {
                         } else if (n == '\\') {
                             self.context = .escape;
                             return cc;
-                        } else return error.LexerError.NoEscape;
-                    } else return error.LexerError.NoEscape;
+                        } else return error.NoEscape;
+                    } else return error.NoEscape;
                 }
             },
 
@@ -373,7 +377,7 @@ pub fn tryNext(self: *Lexer) LexerError!Token {
                 '.' => if (self.context == .number_whole) {
                     self.context = .number_frac;
                     return self.give(.radix);
-                } else return error.LexerError.UnexpectedChar,
+                } else return error.UnexpectedChar,
                 'e' => if (self.context == .number_whole or self.context == .number_frac) {
                     self.context = .number_exp;
                     const n = try self.nextChar();
@@ -386,7 +390,7 @@ pub fn tryNext(self: *Lexer) LexerError!Token {
                 'r' => if (self.context == .number_whole or self.context == .number_frac) {
                     self.context = .number_rep;
                     return self.give(.repeat);
-                } else return error.LexerError.UnexpectedChar,
+                } else return error.UnexpectedChar,
                 '0'...'9', 'A'...'F' => return self.parseDigit(c),
                 else => continue :context .none
             },
@@ -490,35 +494,35 @@ pub fn debugDump(self: *Lexer) void {
     self.dump(stderr) catch return;
 }
 
-pub fn printChar(c: u32, output: *std.io.Writer) !void {
+pub fn printChar(c: u21, output: *std.io.Writer) !void {
     var buf = [4]u8{ 0, 0, 0, 0 };
     const len = try std.unicode.utf8Encode(@intCast(c), &buf);
     try output.writeAll(buf[0..len]);
 }
 
-pub fn debugPrintChar(c: u32) void {
+pub fn debugPrintChar(c: u21) void {
     var buf: [4]u8 = undefined;
     const stderr = std.debug.lockStderrWriter(&buf);
     defer std.debug.unlockStderrWriter();
     nosuspend printChar(c, stderr) catch return;
 }
 
-pub fn debugPrintString(str: []const u32) void {
+pub fn debugPrintString(str: []const u21) void {
     var buf: [4]u8 = undefined;
     const stderr = std.debug.lockStderrWriter(&buf);
     defer std.debug.unlockStderrWriter();
     for (str) |c| printChar(c, stderr) catch return;
 }
 
-pub fn debugEncodeString(comptime str: []const u8) [std.unicode.utf8CountCodepoints(str) catch unreachable]u32 {
-    var encoded: [std.unicode.utf8CountCodepoints(str) catch unreachable]u32 = undefined;
+pub fn debugEncodeString(comptime str: []const u8) [std.unicode.utf8CountCodepoints(str) catch unreachable]u21 {
+    var encoded: [std.unicode.utf8CountCodepoints(str) catch unreachable]u21 = undefined;
     var view = std.unicode.Utf8View.initComptime(str).iterator();
     var i: usize = 0;
     while (view.nextCodepoint()) |c| { encoded[i] = @intCast(c); i += 1; }
     return encoded;
 }
 
-pub fn createTestLexer(comptime src: []const u8) std.mem.Allocator.Error!*Lexer {
+pub fn createTestLexer(comptime src: []const u8) Allocator.Error!*Lexer {
     const reader: *std.io.Reader = try std.testing.allocator.create(std.io.Reader);
     reader.* = std.io.Reader.fixed(src);
     const lexer: *Lexer = try std.testing.allocator.create(Lexer);

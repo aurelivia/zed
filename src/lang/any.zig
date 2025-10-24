@@ -2,22 +2,17 @@ const std = @import("std");
 const log = std.log.scoped(.zed);
 const Allocator = std.mem.Allocator;
 
-const Module = @import("./module.zig");
-
-const Builtin = @import("./builtin.zig");
-const Literal = @import("./literal.zig");
-const Path = @import("./path.zig").Path;
-const Expression = @import("./expression.zig").Expression;
-const Lambda = @import("./lambda.zig").Lambda;
-const Set = @import("./set.zig");
-const List = @import("./list.zig");
+const Error = @import("./error.zig");
+const Expression = @import("./expression.zig");
+const Number = @import("./number.zig");
+const String = @import("./string.zig");
 
 pub const Any = packed struct (u64) {
     pub const Type = enum (u4) {
         builtin = 0, // Set to zero to share space with Inf
 
-        int = 1,
-        literal = 2,
+        literal = 1,
+        int = 2, // Int must not have it's lowest bit set, so that we can use it for arithmetic overflows
         string = 3,
         expr = 4,
 
@@ -38,7 +33,11 @@ pub const Any = packed struct (u64) {
         return (@as(u64, @bitCast(self)) == std.math.maxInt(u64)) or self.float_exp != max_exp or (self.type == .builtin and self.index == 0);
     }
 
-    const norm_nan: Any = @as(Any, @bitCast(std.math.maxInt(u64)));
+    pub inline fn is(self: Any, t: Type) bool {
+        return !self.isFloat() and self.type == t;
+    }
+
+    const norm_nan: Any = @as(Any, @bitCast(@as(u64, std.math.maxInt(u64))));
 
     comptime {
         if (@as(f64, @bitCast(norm_nan)) == std.math.snan(f64)) {
@@ -51,20 +50,29 @@ pub const Any = packed struct (u64) {
         return @as(Any, @bitCast(f));
     }
 
-    pub inline fn toFloat(self: Any) f64 {
-        if (!self.isFloat()) {
+    pub fn toFloat(self: Any) f64 {
+        if (self.isFloat()) {
+            return @as(f64, @bitCast(self));
+        } else if (self.type == .int) {
+            if (self.sign_bit == 1) {
+                return @floatFromInt(@as(i48, @bitCast(self.index)));
+            } else return @floatFromInt(self.index);
+        } else {
             std.debug.print("Attempt to convert identifier to a float which does not represent a float.\n", .{});
             unreachable;
         }
-        return @as(f64, @bitCast(self));
     }
 
     pub inline fn fromIntStrict(i: anytype) Any {
         switch (@typeInfo(@TypeOf(i))) {
             .int => |int| if (int.bits > index_bits) {
-                std.debug.print("Attempt to store integer as smallint wider than available bits.\n", .{});
+                std.debug.print("Attempt to store integer as int wider than available bits.\n", .{});
                 unreachable;
-            } else return .{ .sign_bit = int.signedness == .signed, .type = .smallint, .index = @as(Index, @bitCast(i)) },
+            } else {
+                const Width = if (int.signedness == .signed) i48 else u48;
+                const idx: Index = @bitCast(@as(Width, @intCast(i)));
+                return .{ .sign_bit = @intFromBool(int.signedness == .signed), .type = .int, .index = idx };
+            },
             else => @compileError(@typeName(@TypeOf(i)) ++ " is not an integer type.")
         }
     }
@@ -82,7 +90,7 @@ pub const Any = packed struct (u64) {
         if (self.isFloat()) {
             std.debug.print("Attempt to use identifier representing a float in an integer context.\n", .{});
             unreachable;
-        } else if (self.type != .smallint) {
+        } else if (self.type != .int) {
             std.debug.print("Attempt to use identifier of type \"{s}\" as an integer.\n", .{ @tagName(self.type) });
             unreachable;
         }
@@ -103,11 +111,13 @@ pub const Any = packed struct (u64) {
         } else return self.toIntStrict(T);
     }
 
+
+
     pub const FloatOp = enum {
         add, sub, mul, div,
     };
 
-    pub inline fn floatOp(self: Any, comptime op: FloatOp, rhs: f64) struct { Any, u1 } {
+    pub inline fn floatOp(self: Any, comptime op: FloatOp, rhs: Any) struct { Any, u1 } {
         const result, const overflow = switch (op) {
             .add => @addWithOverflow(self.toFloat(), rhs),
             .sub => @subWithOverflow(self.toFloat(), rhs),
@@ -124,7 +134,7 @@ pub const Any = packed struct (u64) {
         shl, shr
     };
 
-    pub inline fn intOp(self: Any, comptime op: IntOp, comptime T: type, rhs: T) struct { Any, u1 } {
+    pub inline fn intOp(self: Any, comptime op: IntOp, comptime T: type, rhs: Any) struct { Any, u1 } {
         switch (@typeInfo(T)) {
             .int => |int| if (int.bits > index_bits) {
                 switch (op) {

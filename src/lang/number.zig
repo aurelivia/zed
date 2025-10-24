@@ -1,9 +1,9 @@
 const std = @import("std");
 const log = std.log.scoped(.zed);
-const OOM = error.OutOfMemory;
+const Allocator = std.mem.Allocator;
+const OOM = error{OutOfMemory};
 
-const root = @import("./root.zig");
-const mem = root.mem;
+const root = @import("../root.zig");
 
 const Lexer = @import("../lexer.zig");
 
@@ -11,9 +11,8 @@ const Any = @import("./any.zig").Any;
 const Error = @import("./error.zig");
 
 pub fn parse(lex: *Lexer, negative: bool) OOM!Any {
-    var scope: Error = try .init(lex);
-    if (scope.err != null) return try Error.store(scope);
-    const parsed = tryParse(&scope, lex, negative) catch |e| return try Error.parse(scope, lex, e);
+    var scope: Error = .init(lex);
+    const parsed = tryParse(&scope, lex, negative) catch |e| return Error.parse(&scope, lex, e);
     if (scope.err != null or scope.next != null) unreachable;
     return parsed;
 }
@@ -49,7 +48,7 @@ pub fn tryParse(scope: *Error, lex: *Lexer, negative: bool) Error.ParseError!Any
                     const cur = int;
                     int, const over_mul = @mulWithOverflow(int, base_int);
                     int, const over_add = @addWithOverflow(int, d);
-                    if (over_mul or over_add) {
+                    if (over_mul == 1 or over_add == 1) {
                         is_int = false;
                         float = @floatFromInt(cur);
                     } else continue;

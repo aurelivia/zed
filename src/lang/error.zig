@@ -1,10 +1,9 @@
 const std = @import("std");
 const log = std.log.scoped(.zed);
 const Allocator = std.mem.Allocator;
-const OOM = error.OutOfMemory;
+const OOM = error{OutOfMemory};
 
-const root = @import("./root.zig");
-const mem = root.mem;
+const root = @import("../root.zig");
 const Lexer = @import("../lexer.zig");
 
 const Any = @import("./any.zig").Any;
@@ -16,18 +15,19 @@ pub const ParseError = error {
     UnterminatedExpression
 } || OOM;
 
-pub const Store = @import("olib-collections").Table(@This(), Any.Index);
+pub const Store = @import("collections").Table(@This(), Any.Index);
 
 pub const oom: Any = .{ .type = .err, .index = std.math.maxInt(Any.Index) };
 
+// err: ?std.meta.Int(.unsigned, @bitSizeOf(anyerror)),
 err: ?anyerror = null,
 start_line: usize = 0,
 start_col: usize = 0,
 end_line: usize = 0,
 end_col: usize = 0,
-next: ?Any.Index = null,
+next: ?Store.Key = null,
 
-pub fn init(lex: *Lexer) OOM!@This() {
+pub fn init(lex: *Lexer) @This() {
     const next = lex.tryPeek() catch return .{};
     return .{
         .start_line = next.line,
@@ -51,13 +51,13 @@ pub fn advanceNext(self: *@This(), lex: *Lexer) error{LexerError}!Lexer.Token {
     return cur;
 }
 
-pub inline fn store(self: *@This()) OOM!Any {
-    return .{ .type = .err, .index = try root.errors.create(mem, self) };
+pub inline fn store(self: @This()) OOM!Any {
+    return .{ .type = .err, .index = @as(Any.Index, @bitCast(try root.errors.create(root.mem, self))) };
 }
 
-pub fn parse(scope: @This(), lex: *Lexer, err: anyerror) OOM!Any {
-    if (err == OOM) return err;
+pub fn parse(scope: *@This(), lex: *Lexer, err: anyerror) OOM!Any {
+    if (err == error.OutOfMemory) return error.OutOfMemory;
     if (err == error.LexerError) return try lex.getError();
     scope.err = err;
-    return try store(scope);
+    return try store(scope.*);
 }

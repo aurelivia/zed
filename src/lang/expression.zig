@@ -1,33 +1,31 @@
 const std = @import("std");
 const log = std.log.scoped(.zed);
 const Allocator = std.mem.Allocator;
-const OOM = error.OutOfMemory;
+const OOM = error{OutOfMemory};
 
-const root = @import("./root.zig");
-const mem = root.mem;
+const root = @import("../root.zig");
 const buffers = @import("../buffers.zig");
 const Lexer = @import("../lexer.zig");
 
-const Any = @import("./any.zig");
+const Any = @import("./any.zig").Any;
 const Comment = @import("./comment.zig");
 const Error = @import("./error.zig");
 const String = @import("./string.zig");
 const Number = @import("./number.zig");
-const Path = @import("./path.zig");
 
-pub const Store = @import("olib-collections").Table(@This(), Any.Index);
+pub const Store = @import("collections").Table(@This(), Any.Index);
 
 left: Any,
 right: Any,
 
-pub fn parse(lex: *Lexer, terminator: ?Lexer.Token) OOM!Any {
+pub fn parse(lex: *Lexer, terminator: ?Lexer.Token.Value) OOM!Any {
     var scope: Error = .init(lex);
-    const parsed = tryParse(&scope, lex, terminator) catch |e| return try Error.parse(scope, lex, e);
+    const parsed = tryParse(&scope, lex, terminator) catch |e| return Error.parse(&scope, lex, e);
     if (scope.err != null or scope.next != null) return try Error.store(scope);
     return parsed;
 }
 
-fn tryParse(scope: *Error, lex: *Lexer, terminator: ?Lexer.Token) Error.ParseError!Any {
+fn tryParse(scope: *Error, lex: *Lexer, terminator: ?Lexer.Token.Value) Error.ParseError!Any {
     var ops = buffers.get(u8);
     defer buffers.release(ops);
 
@@ -37,15 +35,15 @@ fn tryParse(scope: *Error, lex: *Lexer, terminator: ?Lexer.Token) Error.ParseErr
         const next = try lex.peek();
         switch (next.val) {
             .whitespace => { lex.toss(); prev = try wrap(scope, lex, &ops, prev, null); },
-            .comment => try Comment.tryParse(lex),
+            .comment => try Comment.tryParse(scope, lex),
             .eof, .line, .semicolon => if (terminator == null) {
-                return try wrap(scope, lex, &ops, prev, null);
+                return (try wrap(scope, lex, &ops, prev, null)).?;
             } else if (next.val == .line) lex.toss() else return error.UnterminatedExpression,
 
             // --- Enclosing
 
-            .close_brace, .close_bracket, .close_paren => if (terminator == null or terminator == next.val) {
-                return try wrap(scope, lex, &ops, prev, null);
+            .close_brace, .close_bracket, .close_paren => if (terminator == null or terminator.?.eql(next.val)) {
+                return (try wrap(scope, lex, &ops, prev, null)).?;
             } else return error.UnterminatedExpression,
 
             .open_paren => prev = try wrap(scope, lex, &ops, prev, try parse(lex, .close_paren)),
@@ -61,9 +59,11 @@ fn tryParse(scope: *Error, lex: *Lexer, terminator: ?Lexer.Token) Error.ParseErr
 
             // --- Literals
 
-            .literal => |l| { lex.toss(); prev = try wrap(scope, lex, &ops, prev, .{ .type = .literal, .idx = try root.literals.getOrPut(mem, l) }); },
+            .literal => |l| { lex.toss(); prev = try wrap(scope, lex, &ops, prev, .{
+                .type = .literal, .index = try root.getOrPutLiteral(l)
+            }); },
             .char => |c| { lex.toss(); prev = try wrap(scope, lex, &ops, prev, Any.fromIntStrict(c)); },
-            .single_quote, .double_quote => { lex.toss(); prev = try wrap(scope, lex, &ops, prev, try String.parse(lex, next.val == .double_quote)); },
+            .single_quote, .double_quote => { lex.toss(); prev = try wrap(scope, lex, &ops, prev, try String.parse(lex, next.val.eql(.double_quote))); },
 
             // --- Not Operators
 
@@ -77,9 +77,9 @@ fn tryParse(scope: *Error, lex: *Lexer, terminator: ?Lexer.Token) Error.ParseErr
                 lex.toss();
 
                 // Handle negative numbers
-                if (op == .minus) {
+                if (op.eql(.minus)) {
                     const maybe_digit = try lex.peek();
-                    switch (maybe_digit) {
+                    switch (maybe_digit.val) {
                         .digit, .base_header => {
                             prev = try wrap(scope, lex, &ops, prev, null);
                             if (maybe_digit.val == .base_header) lex.toss();
@@ -87,7 +87,7 @@ fn tryParse(scope: *Error, lex: *Lexer, terminator: ?Lexer.Token) Error.ParseErr
                         },
                         else => {}
                     }
-                } else if (ops.len == 0 and (try lex.peek()).isOperator() == false) {
+                } else if (ops.items.len == 0 and (try lex.peek()).isOperator() == false) {
                     switch (op) {
                         .colon => {
 
@@ -99,7 +99,7 @@ fn tryParse(scope: *Error, lex: *Lexer, terminator: ?Lexer.Token) Error.ParseErr
                     }
                 }
 
-                try ops.appendSlice(mem, Lexer.Token.Value.toBytes(op));
+                try ops.append(root.mem, Lexer.Token.Value.toChar(op));
             }
         }
     }
@@ -110,43 +110,49 @@ pub fn wrap(scope: *Error, lex: *Lexer, ops: *std.ArrayList(u8), left: ?Any, rig
     scope.end_col = lex.cur_col;
 
     if (right) |r| if (r.type == .err) {
-        if (scope.next != null) |next| {
-            const errs = root.errors.sliceMut();
+        if (scope.next) |next| {
+            var errs = root.errors.sliceMut();
             defer errs.release();
-            var n: Any.Index = next;
+            var n: Error.Store.Key = next;
             while (true) {
-                const nerr = errs.get(n).?;
+                var nerr = errs.get(n).?;
                 if (nerr.next) |nn| {
                     n = nn;
                 } else {
-                    nerr.next = r.index;
+                    nerr.next = @bitCast(r.index);
                     errs.set(n, nerr);
                     break;
                 }
             }
-        } else scope.next = r.index;
+        } else scope.next = @bitCast(r.index);
 
         return r;
     };
 
     if (left) |l| if (l.type == .err) return l;
 
-    const wrapped: ?Any = if (ops.len) b: {
-        const op = try root.literals.getOrPut(mem, ops.items);
+    const wrapped: ?Any = if (ops.items.len != 0) b: {
+        const op: Any = .{ .type = .literal, .index = try root.getOrPutLiteral(ops.items) };
         ops.clearRetainingCapacity();
         if (left) |l| {
-            break :b .{ .type = .expr , .index = try root.exprs.create(mem, .{
-                .left = .{ .type = .literal, .index = op },
-                .right = l
-            }) };
+            break :b .{
+                .type = .expr ,
+                .index = @as(Any.Index, @bitCast(try root.exprs.create(root.mem, .{
+                    .left = op,
+                    .right = l
+                })))
+            };
         } else break :b op;
     } else left;
 
     if (right) |r| {
         if (wrapped) |l| {
-            return .{ .type = .expr, .index = try root.exprs.create(mem, .{
-                .left = l, .right = r
-            }) };
+            return .{
+                .type = .expr,
+                .index = @as(Any.Index, @bitCast(try root.exprs.create(root.mem, .{
+                    .left = l, .right = r
+                })))
+            };
         } else return r;
     } else return wrapped;
 }

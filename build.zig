@@ -8,6 +8,10 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const root = b.addModule("root", .{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize });
+    const collections = b.dependency("collections", .{ .target = target, .optimize = optimize });
+    root.addImport("collections", collections.module("root"));
+    const terminal = b.dependency("terminal", .{ .target = target, .optimize = optimize });
+    root.addImport("terminal", terminal.module("root"));
 
     // const zg = b.dependency("zg", .{ .target = target, .optimize = optimize });
     // root.addImport("zg-normalize", zg.module("Normalize"));
@@ -17,6 +21,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
     const repl = b.createModule(.{ .root_source_file = b.path("src/repl.zig"), .target = target, .optimize = optimize });
+    repl.addImport("inner", root);
+    repl.addImport("terminal", terminal.module("root"));
     const exe = b.addExecutable(.{ .name = "repl", .root_module = repl });
     b.installArtifact(exe);
     const step = b.step("run", ".");

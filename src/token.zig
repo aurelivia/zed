@@ -33,6 +33,10 @@ pub const Value = union (enum) {
     base_binary, base_octal, base_hex,
     exponent, repeat,
 
+    pub inline fn eql(self: Value, rhs: Value) bool {
+        return std.meta.activeTag(self) == std.meta.activeTag(rhs);
+    }
+
     pub fn toChar(self: Value) u8 {
         return switch (self) {
             .digit => |d| switch (d) {
