@@ -1,54 +1,77 @@
 const std = @import("std");
 const log = std.log.scoped(.zed);
+const terminal = @import("terminal");
 
-const root = @import("./root.zig");
-const mem = root.mem;
+const root = @import("inner");
+const Lexer = root.Lexer;
+const buffers = root.buffers;
 
-const Module = @import("./module.zig");
+const Any = root.Lang.Any;
+const Expression = root.Lang.Expression;
 
 pub const Cmd = enum {
-    q, quit
+    q, quit,
+    lexdump
 };
 
+var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+const mem: std.mem.Allocator = gpa.allocator();
+
 pub fn main() !void {
-    var input_buffer: [4096]u8 = undefined;
-    var stdin = std.fs.File.stdin().reader(&input_buffer);
-    const input = &stdin.interface;
-    var output_buffer: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&output_buffer);
-    const output = &stdout.interface;
+    defer _ = gpa.deinit();
 
-    var module: Module = .init();
-    defer module.deinit();
+    try root.init(mem);
+    defer root.deinit();
 
-    loop: while (true) {
-        try output.flush();
-        var line = try input.takeDelimiterExclusive('\n');
-        if (line.len == 0) continue :loop;
+    var term: terminal.REPL = try .init(.{
+        .mem = mem,
+        .prefix = prefix,
+        .eval = eval
+    });
+    defer term.deinit();
 
-        if (std.mem.startsWith(u8, line, "repl")) line = line[4..];
+    try term.run();
+}
 
-        if (line[0] == '.') {
-            const cmd_str = std.mem.sliceTo(line[1..], ' ');
-            if (cmd_str.len == 0) {
-                try output.writeAll("syntax error\n");
-                continue :loop;
-            }
+fn prefix(interface: *terminal.Interface) std.Io.Writer.Error!void {
+    try interface.putChar('>');
+    try interface.putChar(' ');
+}
 
-            const cmd: ?Cmd = std.meta.stringToEnum(Cmd, cmd_str);
-            if (cmd == null) {
-                try output.print("repl.{s} is not a valid command.\n", .{ cmd_str });
-                continue :loop;
-            }
+fn eval(interface: *terminal.Interface, input: terminal.REPL.Context.Input) terminal.REPL.Context.Error!bool {
+    const bytes, _ = input;
+    if (bytes.len == 0) return false;
+    var start: usize = 0;
+    if (std.mem.startsWith(u8, bytes, "repl")) start = 4;
 
-            switch (cmd.?) {
-                .q, .quit => break :loop
-            }
+    if (bytes[start] == '.') {
+        const cmd_str = std.mem.sliceTo(bytes[(start + 1)..], ' ');
+
+        const cmd: ?Cmd = std.meta.stringToEnum(Cmd, cmd_str);
+        if (cmd == null) {
+            try interface.print("repl.{s} is not a valid command.\n", .{ cmd_str });
+            return false;
         }
 
-        try output.writeAll(line);
-        try output.writeByte('\n');
+        switch (cmd.?) {
+            .q, .quit => return true,
+            .lexdump => {
+                // var reader = std.Io.Reader.fixed(line.items[9..]);
+                // var lex: Lexer = .init(&reader);
+                // defer lex.deinit();
+                // try lex.dump(output);
+                // try output.writeByte('\n');
+                return false;
+            }
+        }
     }
 
-    try output.flush();
+    var reader = std.Io.Reader.fixed(bytes[start..]);
+    var lex: Lexer = .init(&reader);
+    defer lex.deinit();
+
+    const result: Any = try Expression.parse(&lex, null);
+    try result.dump(interface, 0);
+
+    return false;
 }

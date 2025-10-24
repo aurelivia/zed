@@ -1,6 +1,7 @@
 const std = @import("std");
 const log = std.log.scoped(.zed);
 const Allocator = std.mem.Allocator;
+const term = @import("terminal");
 
 const Error = @import("./error.zig");
 const Expression = @import("./expression.zig");
@@ -42,6 +43,36 @@ pub const Any = packed struct (u64) {
     comptime {
         if (@as(f64, @bitCast(norm_nan)) == std.math.snan(f64)) {
             @compileError("Normalized NaN is considered a signalling NaN.");
+        }
+    }
+
+    pub fn print(self: Any, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        if (self.isFloat()) return try Number.print(writer, self);
+        switch (self.type) {
+            // .builtin => try Builtin.print(writer, self),
+            .builtin => unreachable,
+            .int => try Number.print(writer, self),
+            // .literal => unreachable,
+            .literal => try writer.writeAll("<lit>"),
+            .string => try String.print(writer, self),
+            .expr => try writer.writeAll("<expr>"),
+            .err => try Error.print(writer, self)
+        }
+    }
+
+    pub fn dump(self: Any, interface: *term.Interface, indent: usize) std.Io.Writer.Error!void {
+        // _ = self; _ = indent;
+        // // std.debug.print("{*}\n\r", .{ interface.writer });
+        // try interface.putBytes("hello world.\n\r");
+        if (self.isFloat()) return try Number.dump(interface, self, indent);
+        switch (self.type) {
+            .builtin => try interface.putBytes(" <builtin>"),
+            .int => try Number.dump(interface, self, indent),
+            .literal => try String.dump(interface, self, indent, false),
+            .string => try String.dump(interface, self, indent, true),
+            .expr => try Expression.dump(interface, self, indent),
+            // .err => try Error.dump(interface, self)
+            .err => try interface.putBytes(" <err>"),
         }
     }
 

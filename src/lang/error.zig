@@ -61,3 +61,8 @@ pub fn parse(scope: *@This(), lex: *Lexer, err: anyerror) OOM!Any {
     scope.err = err;
     return try store(scope.*);
 }
+
+pub fn print(writer: *std.Io.Writer, idx: Any) std.Io.Writer.Error!void {
+    _ = idx;
+    try writer.writeAll("<err>");
+}

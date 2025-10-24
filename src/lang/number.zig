@@ -2,6 +2,7 @@ const std = @import("std");
 const log = std.log.scoped(.zed);
 const Allocator = std.mem.Allocator;
 const OOM = error{OutOfMemory};
+const term = @import("terminal");
 
 const root = @import("../root.zig");
 
@@ -108,3 +109,15 @@ pub fn tryParse(scope: *Error, lex: *Lexer, negative: bool) Error.ParseError!Any
         }
     }
 }
+
+pub fn print(writer: *std.Io.Writer, idx: Any) std.Io.Writer.Error!void {
+    if (idx.isFloat() or idx.type == .int) {
+        try writer.printFloat(idx.toFloat(), .{ .mode = .scientific, .case = .upper });
+    } else unreachable;
+}
+
+pub fn dump(interface: *term.Interface, idx: Any, indent: usize) std.Io.Writer.Error!void {
+    try interface.splatByte(' ', indent + 1);
+    try print(interface.writer, idx);
+}
+

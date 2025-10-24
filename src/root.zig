@@ -11,7 +11,6 @@ pub const Lang = struct {
     pub const Expression = @import("./lang/expression.zig");
 };
 
-
 pub var mem: Allocator = undefined;
 
 pub var errors: Lang.Error.Store = .empty;

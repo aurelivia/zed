@@ -2,6 +2,7 @@ const std = @import("std");
 const log = std.log.scoped(.zed);
 const Allocator = std.mem.Allocator;
 const OOM = error{OutOfMemory};
+const term = @import("terminal");
 
 const root = @import("../root.zig");
 const buffers = @import("../buffers.zig");
@@ -155,4 +156,38 @@ pub fn wrap(scope: *Error, lex: *Lexer, ops: *std.ArrayList(u8), left: ?Any, rig
             };
         } else return r;
     } else return wrapped;
+}
+
+pub fn dump(interface: *term.Interface, idx: Any, indent: usize) std.Io.Writer.Error!void {
+    std.debug.assert(idx.is(.expr));
+    var exprs = root.exprs.slice();
+    defer exprs.release();
+
+    var prefixes = buffers.get(u8);
+    defer buffers.release(prefixes);
+
+    try dumpInner(interface, &exprs, idx, indent, &prefixes);
+}
+
+pub fn dumpInner(interface: *term.Interface, exprs: *Store.Slice, idx: Any, indent: usize, prefixes: *std.ArrayList(u8)) std.Io.Writer.Error!void {
+    std.debug.assert(idx.is(.expr));
+    try interface.splatByte(' ', indent);
+    const cur = exprs.get(@as(Store.Key, @bitCast(idx.index))).?;
+
+    try interface.putBytes(if (prefixes.items.len == 0) " ╭─" else "─┬─");
+    if (cur.left.is(.expr)) {
+        prefixes.appendSlice(root.mem, " │ ") catch return;
+        try dumpInner(interface, exprs, cur.left, indent, prefixes);
+        prefixes.items.len -= (" │ ".len);
+    } else try Any.dump(cur.left, interface, 0);
+    try interface.newLine();
+
+    try interface.putBytes(prefixes.items);
+    try interface.putBytes(" ╰─");
+
+    if (cur.right.is(.expr)) {
+        prefixes.appendSlice(root.mem, "   ") catch return;
+        try dumpInner(interface, exprs, cur.right, indent, prefixes);
+        prefixes.items.len -= 3;
+    } else try Any.dump(cur.right, interface, 0);
 }
